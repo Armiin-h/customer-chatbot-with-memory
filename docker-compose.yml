@@ -7,8 +7,8 @@ services:
     env_file:
       - .env
     environment:
-      # Reach Ollama on the host machine from inside the container
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Always reach host Ollama from the container (ignore local .env localhost)
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/chat_history.db}
