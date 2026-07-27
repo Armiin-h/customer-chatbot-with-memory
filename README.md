@@ -6,11 +6,11 @@ Built with FastAPI, React, LangChain, and Ollama.
 ## Features
 
 - Per-session conversation memory (`RunnableWithMessageHistory`, last-N turns)
+- SQLite-backed history that survives process restarts
 - NovaDesk support-agent system prompt
 - Session create / inspect / reset endpoints
-- Non-streaming `POST /chat` (streaming lands next)
+- Non-streaming `POST /chat` and SSE `POST /chat/stream`
 - React chat UI with live typing (upcoming)
-- SQLite-backed history (upcoming)
 - Docker Compose for API + frontend
 
 ## Stack
@@ -20,7 +20,7 @@ Built with FastAPI, React, LangChain, and Ollama.
 | LLM | Ollama (local) |
 | Orchestration | LangChain (`RunnableWithMessageHistory`) |
 | Backend | FastAPI |
-| History | In-memory (SQLite next) |
+| History | SQLite (windowed per session) |
 | Frontend | React + Vite |
 | Deploy | Docker Compose |
 
@@ -61,6 +61,13 @@ npm run dev
 For local runs, keep `OLLAMA_BASE_URL=http://localhost:11434` in `.env`.
 Compose overrides that to `host.docker.internal` inside the API container.
 
+## Tests
+
+```bash
+cd backend
+pytest -q
+```
+
 ## Try multi-turn memory (curl)
 
 ```bash
@@ -75,6 +82,11 @@ curl -s -X POST http://localhost:8000/chat \
 curl -s -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d "{\"session_id\": \"YOUR_SESSION_ID\", \"message\": \"What does that plan cost per user?\"}"
+
+# Stream tokens (SSE)
+curl -N -X POST http://localhost:8000/chat/stream \
+  -H "Content-Type: application/json" \
+  -d "{\"session_id\": \"YOUR_SESSION_ID\", \"message\": \"Summarize what we discussed.\"}"
 
 # Inspect / clear
 curl -s http://localhost:8000/sessions/YOUR_SESSION_ID
@@ -91,15 +103,27 @@ Invoke-RestMethod -Method Post http://localhost:8000/chat -ContentType "applicat
   -Body (@{ session_id = $session.session_id; message = "What does that plan cost per user?" } | ConvertTo-Json)
 ```
 
+### SSE event shape
+
+Each `data:` line is JSON:
+
+| `type` | Fields | Meaning |
+|--------|--------|---------|
+| `session` | `session_id` | Session used for this turn |
+| `token` | `content` | Next text chunk |
+| `done` | `session_id`, `message_count` | Stream finished |
+| `error` | `detail` | Upstream failure |
+
 ## API overview
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Liveness + model name |
+| GET | `/health` | Liveness + model + DB name |
 | POST | `/sessions` | Create empty session |
 | GET | `/sessions/{id}` | Session info + message count |
 | DELETE | `/sessions/{id}` | Clear session history |
-| POST | `/chat` | One chat turn (returns `reply`) |
+| POST | `/chat` | One chat turn (JSON `reply`) |
+| POST | `/chat/stream` | One chat turn (SSE tokens) |
 
 ## Docker
 
@@ -117,10 +141,12 @@ docker compose up --build
 
 ```
 backend/app/
-  chat_service.py   LangChain chain + memory wiring
-  memory.py         Windowed in-memory session store
+  chat_service.py   LangChain chain + streaming
+  db.py             SQLite schema bootstrap
+  memory.py         Windowed SQLite session store
   prompts.py        NovaDesk support system prompt
   routers/          sessions + chat routes
+backend/tests/      Memory + API unit tests
 frontend/           React + Vite UI
 docker-compose.yml
 ```
