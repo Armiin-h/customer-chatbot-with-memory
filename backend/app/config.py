@@ -12,6 +12,9 @@ _ENV_FILES = tuple(
     str(path) for path in (_ROOT_ENV, _LOCAL_ENV, Path(".env")) if path.is_file()
 ) or (".env",)
 
+# Resolve relative SQLite paths against the backend package root
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -32,6 +35,22 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def sqlite_path(self) -> Path:
+        """Filesystem path for the SQLite chat history database."""
+        url = self.database_url
+        if url.startswith("sqlite:///"):
+            raw = url.removeprefix("sqlite:///")
+        elif url.startswith("sqlite://"):
+            raw = url.removeprefix("sqlite://")
+        else:
+            raw = url
+
+        path = Path(raw)
+        if not path.is_absolute():
+            path = _BACKEND_ROOT / path
+        return path.resolve()
 
 
 @lru_cache
