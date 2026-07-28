@@ -10,7 +10,7 @@ Built with FastAPI, React, LangChain, and Ollama.
 - NovaDesk support-agent system prompt
 - Session create / inspect / reset endpoints
 - Non-streaming `POST /chat` and SSE `POST /chat/stream`
-- React chat UI with live typing (upcoming)
+- React chat UI with message bubbles, session reset, and live typing
 - Docker Compose for API + frontend
 
 ## Stack
