@@ -1,1 +1,135 @@
-/* Component-level styles reserved for the chat UI (Day 4+). */
+.chat-shell {
+  margin-top: 1.25rem;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  backdrop-filter: blur(8px);
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.95rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.session {
+  min-width: 0;
+}
+
+.session-label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.session-id {
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  max-width: 26rem;
+}
+
+.chat-log {
+  padding: 1rem;
+  height: 26rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.empty {
+  margin: auto 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.bubble {
+  max-width: 82%;
+  padding: 0.72rem 0.82rem;
+  border-radius: 0.65rem;
+  line-height: 1.45;
+  border: 1px solid var(--border);
+}
+
+.bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: #17384f;
+  color: #f7fbff;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.bubble.assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.typing {
+  margin: 0.2rem 0 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.composer {
+  display: flex;
+  gap: 0.55rem;
+  border-top: 1px solid var(--border);
+  padding: 0.8rem;
+}
+
+.composer input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: #fff;
+  padding: 0.65rem 0.75rem;
+  color: var(--ink);
+}
+
+.composer input:focus {
+  outline: 2px solid #6ea6c7;
+  outline-offset: 1px;
+}
+
+.btn-primary,
+.btn-secondary {
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.62rem 0.85rem;
+}
+
+.btn-primary {
+  background: #14557a;
+  color: #ffffff;
+}
+
+.btn-secondary {
+  background: #ffffff;
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.footnote {
+  margin: 0;
+  padding: 0 0.9rem 0.8rem;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
