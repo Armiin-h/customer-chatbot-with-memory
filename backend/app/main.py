@@ -19,7 +19,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Customer Chatbot with Memory",
     description="Multi-turn support agent with conversation history and streaming replies.",
-    version="0.3.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 

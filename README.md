@@ -1,35 +1,37 @@
 # Customer Chatbot with Memory
 
-Multi-turn customer support chatbot that keeps conversation context across turns.
-Built with FastAPI, React, LangChain, and Ollama.
+Multi-turn customer support chatbot for a fictional SaaS product (**NovaDesk**).
+The agent keeps conversation context across turns, streams replies token-by-token,
+and persists history in SQLite.
 
 ## Features
 
-- Per-session conversation memory (`RunnableWithMessageHistory`, last-N turns)
-- SQLite-backed history that survives process restarts
-- NovaDesk support-agent system prompt
-- Session create / inspect / reset endpoints
-- Non-streaming `POST /chat` and SSE `POST /chat/stream`
-- React chat UI with message bubbles, session reset, and live typing
-- Docker Compose for API + frontend
+- Per-session memory via LangChain `RunnableWithMessageHistory` (last-N turns)
+- SQLite-backed history that survives restarts
+- NovaDesk support system prompt (plans, billing, refunds, export)
+- JSON `POST /chat` and SSE `POST /chat/stream`
+- React UI: bubbles, markdown, typing indicator, stop/retry, new-chat session reset
+- Docker Compose (API + nginx frontend; Ollama on the host)
 
 ## Stack
 
 | Layer | Technology |
 |-------|------------|
-| LLM | Ollama (local) |
-| Orchestration | LangChain (`RunnableWithMessageHistory`) |
+| LLM | Ollama (local, default `llama3.2`) |
+| Orchestration | LangChain LCEL + `RunnableWithMessageHistory` |
 | Backend | FastAPI |
 | History | SQLite (windowed per session) |
 | Frontend | React + Vite |
 | Deploy | Docker Compose |
 
+See [docs/architecture.md](docs/architecture.md) for the request path and Docker topology.
+
 ## Prerequisites
 
 - Python 3.11+
-- Node.js 20+
-- [Ollama](https://ollama.com/) with a chat model (default: `llama3.2`)
-- Docker Desktop (optional, for compose)
+- Node.js 20+ (local UI)
+- [Ollama](https://ollama.com/) with a chat model
+- Docker Desktop (optional)
 
 ```bash
 ollama pull llama3.2
@@ -54,12 +56,43 @@ npm install
 npm run dev
 ```
 
-- API: http://localhost:8000  
-- Docs: http://localhost:8000/docs  
-- UI: http://localhost:5173  
+| Service | URL |
+|---------|-----|
+| API | http://localhost:8000 |
+| OpenAPI docs | http://localhost:8000/docs |
+| UI (Vite) | http://localhost:5173 |
 
-For local runs, keep `OLLAMA_BASE_URL=http://localhost:11434` in `.env`.
-Compose overrides that to `host.docker.internal` inside the API container.
+Keep `OLLAMA_BASE_URL=http://localhost:11434` for host runs. Compose forces
+`host.docker.internal` inside the API container.
+
+## Docker Compose
+
+```bash
+cp .env.example .env
+# Ensure Ollama is running on the host
+docker compose up --build
+```
+
+| Service | URL |
+|---------|-----|
+| UI | http://localhost:3000 |
+| API | http://localhost:8000 |
+
+The frontend build uses `VITE_API_BASE_URL=/api`. Nginx proxies `/api/*` to the
+API container with buffering disabled so SSE stays live.
+
+## Demo script
+
+With the API running:
+
+```bash
+# From repo root
+python scripts/demo_multiturn.py
+python scripts/demo_multiturn.py --stream
+```
+
+The script creates a session, mentions the **Pro** plan, then asks what **that**
+plan costs — the follow-up should answer **$12/user** if memory is working.
 
 ## Tests
 
@@ -67,52 +100,6 @@ Compose overrides that to `host.docker.internal` inside the API container.
 cd backend
 pytest -q
 ```
-
-## Try multi-turn memory (curl)
-
-```bash
-# Create a session
-curl -s -X POST http://localhost:8000/sessions
-
-# Chat (reuse session_id from the response)
-curl -s -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"session_id\": \"YOUR_SESSION_ID\", \"message\": \"I upgraded to the Pro plan yesterday.\"}"
-
-curl -s -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d "{\"session_id\": \"YOUR_SESSION_ID\", \"message\": \"What does that plan cost per user?\"}"
-
-# Stream tokens (SSE)
-curl -N -X POST http://localhost:8000/chat/stream \
-  -H "Content-Type: application/json" \
-  -d "{\"session_id\": \"YOUR_SESSION_ID\", \"message\": \"Summarize what we discussed.\"}"
-
-# Inspect / clear
-curl -s http://localhost:8000/sessions/YOUR_SESSION_ID
-curl -s -X DELETE http://localhost:8000/sessions/YOUR_SESSION_ID
-```
-
-PowerShell equivalent:
-
-```powershell
-$session = Invoke-RestMethod -Method Post http://localhost:8000/sessions
-Invoke-RestMethod -Method Post http://localhost:8000/chat -ContentType "application/json" `
-  -Body (@{ session_id = $session.session_id; message = "I upgraded to the Pro plan yesterday." } | ConvertTo-Json)
-Invoke-RestMethod -Method Post http://localhost:8000/chat -ContentType "application/json" `
-  -Body (@{ session_id = $session.session_id; message = "What does that plan cost per user?" } | ConvertTo-Json)
-```
-
-### SSE event shape
-
-Each `data:` line is JSON:
-
-| `type` | Fields | Meaning |
-|--------|--------|---------|
-| `session` | `session_id` | Session used for this turn |
-| `token` | `content` | Next text chunk |
-| `done` | `session_id`, `message_count` | Stream finished |
-| `error` | `detail` | Upstream failure |
 
 ## API overview
 
@@ -125,29 +112,23 @@ Each `data:` line is JSON:
 | POST | `/chat` | One chat turn (JSON `reply`) |
 | POST | `/chat/stream` | One chat turn (SSE tokens) |
 
-## Docker
+### SSE event shape
 
-Ollama runs on the host. The API container reaches it via `host.docker.internal`.
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-- API: http://localhost:8000  
-- UI: http://localhost:3000  
+| `type` | Fields | Meaning |
+|--------|--------|---------|
+| `session` | `session_id` | Session used for this turn |
+| `token` | `content` | Next text chunk |
+| `done` | `session_id`, `message_count` | Stream finished |
+| `error` | `detail` | Upstream failure |
 
 ## Project layout
 
 ```
-backend/app/
-  chat_service.py   LangChain chain + streaming
-  db.py             SQLite schema bootstrap
-  memory.py         Windowed SQLite session store
-  prompts.py        NovaDesk support system prompt
-  routers/          sessions + chat routes
-backend/tests/      Memory + API unit tests
-frontend/           React + Vite UI
+backend/app/          FastAPI + LangChain + SQLite memory
+backend/tests/        Memory and API unit tests
+frontend/src/         React chat UI (api, markdown, App)
+scripts/demo_multiturn.py
+docs/architecture.md
 docker-compose.yml
 ```
 
