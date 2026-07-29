@@ -1,43 +1,47 @@
 import { useEffect, useRef, useState } from "react";
+import { API_BASE, createSession, fetchHealth, streamChat } from "./api";
+import { markdownToHtml } from "./markdown";
 import "./App.css";
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 export default function App() {
   const [health, setHealth] = useState(null);
-  const [error, setError] = useState(null);
+  const [healthError, setHealthError] = useState(null);
+  const [chatError, setChatError] = useState(null);
   const [sessionId, setSessionId] = useState("");
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [messageCount, setMessageCount] = useState(0);
+  const [lastFailedMessage, setLastFailedMessage] = useState("");
   const bottomRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     async function checkHealth() {
       try {
-        const res = await fetch(`${API_BASE}/health`);
-        if (!res.ok) {
-          throw new Error(`Health check failed (${res.status})`);
-        }
-        const data = await res.json();
+        const data = await fetchHealth(controller.signal);
         if (!cancelled) {
           setHealth(data);
-          setError(null);
+          setHealthError(null);
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not reach API");
+        if (!cancelled && err?.name !== "AbortError") {
           setHealth(null);
+          setHealthError(err instanceof Error ? err.message : "Could not reach API");
         }
       }
     }
 
     checkHealth();
+    const timer = setInterval(checkHealth, 30000);
+
     return () => {
       cancelled = true;
+      controller.abort();
+      clearInterval(timer);
     };
   }, []);
 
@@ -46,117 +50,86 @@ export default function App() {
   }, [messages, isStreaming]);
 
   async function resetSession() {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+
     setMessages([]);
     setMessageCount(0);
+    setChatError(null);
+    setLastFailedMessage("");
+    setIsStreaming(false);
 
     try {
-      const res = await fetch(`${API_BASE}/sessions`, { method: "POST" });
-      if (!res.ok) {
-        throw new Error(`Could not create session (${res.status})`);
-      }
-      const payload = await res.json();
+      const payload = await createSession();
       setSessionId(payload.session_id || "");
-      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create session");
+      setChatError(err instanceof Error ? err.message : "Could not create session");
     }
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const message = input.trim();
+  function appendToken(token) {
+    setMessages((prev) => {
+      const next = [...prev];
+      for (let i = next.length - 1; i >= 0; i -= 1) {
+        if (next[i].role === "assistant") {
+          next[i] = {
+            ...next[i],
+            content: `${next[i].content}${token || ""}`,
+          };
+          break;
+        }
+      }
+      return next;
+    });
+  }
+
+  async function sendMessage(rawMessage) {
+    const message = rawMessage.trim();
     if (!message || isStreaming) {
       return;
     }
 
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setInput("");
     setIsStreaming(true);
-    setError(null);
+    setChatError(null);
+    setLastFailedMessage("");
 
-    const userMessage = { role: "user", content: message };
-    const assistantMessage = { role: "assistant", content: "" };
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: message },
+      { role: "assistant", content: "" },
+    ]);
 
     try {
-      const res = await fetch(`${API_BASE}/chat/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId || undefined,
-          message,
-        }),
+      await streamChat({
+        sessionId,
+        message,
+        signal: controller.signal,
+        onEvent: (eventPayload) => {
+          if (eventPayload.type === "session" && eventPayload.session_id) {
+            setSessionId(eventPayload.session_id);
+          } else if (eventPayload.type === "token") {
+            appendToken(eventPayload.content);
+          } else if (eventPayload.type === "done") {
+            setMessageCount(eventPayload.message_count || 0);
+          }
+        },
       });
-
-      if (!res.ok || !res.body) {
-        throw new Error(`Stream request failed (${res.status})`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() || "";
-
-        for (const eventBlock of events) {
-          const dataLines = eventBlock
-            .split("\n")
-            .filter((line) => line.startsWith("data: "))
-            .map((line) => line.slice(6));
-
-          if (!dataLines.length) {
-            continue;
-          }
-
-          try {
-            const eventPayload = JSON.parse(dataLines.join("\n"));
-
-            if (eventPayload.type === "session" && eventPayload.session_id) {
-              setSessionId(eventPayload.session_id);
-              continue;
-            }
-
-            if (eventPayload.type === "token") {
-              setMessages((prev) => {
-                const next = [...prev];
-                for (let i = next.length - 1; i >= 0; i -= 1) {
-                  if (next[i].role === "assistant") {
-                    next[i] = {
-                      ...next[i],
-                      content: `${next[i].content}${eventPayload.content || ""}`,
-                    };
-                    break;
-                  }
-                }
-                return next;
-              });
-              continue;
-            }
-
-            if (eventPayload.type === "done") {
-              setMessageCount(eventPayload.message_count || 0);
-              continue;
-            }
-
-            if (eventPayload.type === "error") {
-              throw new Error(eventPayload.detail || "Streaming failed");
-            }
-          } catch (parseErr) {
-            throw new Error(
-              parseErr instanceof Error ? parseErr.message : "Invalid stream event",
-            );
-          }
-        }
-      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Chat request failed");
+      if (err?.name === "AbortError") {
+        return;
+      }
+      const detail = err instanceof Error ? err.message : "Chat request failed";
+      setChatError(detail);
+      setLastFailedMessage(message);
       setMessages((prev) => {
         if (!prev.length) {
           return prev;
@@ -166,14 +139,39 @@ export default function App() {
         if (last?.role === "assistant" && !last.content) {
           next[next.length - 1] = {
             role: "assistant",
-            content: "I could not generate a reply. Please try again.",
+            content: "I could not generate a reply. Use **Retry** below or send a new message.",
           };
         }
         return next;
       });
     } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
       setIsStreaming(false);
     }
+  }
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    sendMessage(input);
+  }
+
+  function handleRetry() {
+    if (!lastFailedMessage || isStreaming) {
+      return;
+    }
+    const message = lastFailedMessage;
+    // Drop the failed user+assistant pair, then resend after state settles
+    setMessages((prev) => (prev.length >= 2 ? prev.slice(0, -2) : prev));
+    setTimeout(() => {
+      sendMessage(message);
+    }, 0);
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
+    setIsStreaming(false);
   }
 
   return (
@@ -186,14 +184,30 @@ export default function App() {
 
       <section className="status-panel" aria-live="polite">
         <h2>API status</h2>
-        {error && <p className="status error">Issue — {error}</p>}
-        {health && !error && (
+        {healthError && <p className="status error">Offline — {healthError}</p>}
+        {health && !healthError && (
           <p className="status ok">
-            Online — {health.service} · model {health.ollama_model}
+            Online — {health.service} · model {health.ollama_model} · {API_BASE}
           </p>
         )}
-        {!health && !error && <p className="status">Checking…</p>}
+        {!health && !healthError && <p className="status">Checking…</p>}
       </section>
+
+      {chatError && (
+        <div className="error-banner" role="alert">
+          <p>{chatError}</p>
+          <div className="error-actions">
+            {lastFailedMessage && (
+              <button type="button" className="btn-secondary" onClick={handleRetry} disabled={isStreaming}>
+                Retry
+              </button>
+            )}
+            <button type="button" className="btn-secondary" onClick={() => setChatError(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       <section className="chat-shell">
         <div className="chat-toolbar">
@@ -215,7 +229,16 @@ export default function App() {
 
           {messages.map((msg, index) => (
             <div key={`${msg.role}-${index}`} className={`bubble ${msg.role}`}>
-              <p>{msg.content || (msg.role === "assistant" ? "…" : "")}</p>
+              {msg.role === "assistant" ? (
+                <div
+                  className="md"
+                  dangerouslySetInnerHTML={{
+                    __html: markdownToHtml(msg.content || (isStreaming ? "…" : "")),
+                  }}
+                />
+              ) : (
+                <p>{msg.content}</p>
+              )}
             </div>
           ))}
 
@@ -230,10 +253,17 @@ export default function App() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             disabled={isStreaming}
+            aria-label="Message"
           />
-          <button type="submit" className="btn-primary" disabled={isStreaming || !input.trim()}>
-            Send
-          </button>
+          {isStreaming ? (
+            <button type="button" className="btn-secondary" onClick={handleStop}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" className="btn-primary" disabled={!input.trim()}>
+              Send
+            </button>
+          )}
         </form>
 
         <p className="footnote">Stored messages in this session: {messageCount}</p>
